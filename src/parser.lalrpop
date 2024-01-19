@@ -1,12 +1,12 @@
 use std::str::FromStr;
 
-use intaglio::SymbolTable;
 use lalrpop_util::ParseError;
+use string_interner::StringInterner;
 
 use crate::expr::{Expr, Op};
 use super::*;
 
-grammar(idents: &mut SymbolTable, ret: Ident, yld: Ident);
+grammar(idents: &mut StringInterner);
 
 match {
 	"+", "-", "*", "/", "%", "&", "^", "|", "<<", ">>", "!",
@@ -54,7 +54,7 @@ ScriptStatement: ScriptStatement<'input> = {
 	<start:@L> "while" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" => {
 		ScriptStatement { start, end, kind: ScriptStatementKind::While { cond, body } }
 	},
-	"do" "{" <body:ScriptStatement*> "}" <start:@L> "while" <cond:Expr> ";" => {
+	"do" "{" <body:ScriptStatement*> "}" <start:@L> "while" <cond:Expr> <end:@R> ";" => {
 		ScriptStatement { start, end, kind: ScriptStatementKind::DoWhile { cond, body } }
 	},
 	<start:@L> "for" <init:SimpleStatement> ";" <cond:Expr> ";" <post_body:SimpleStatement> <end:@R> "{" <body:ScriptStatement*> "}" => {
@@ -121,8 +121,8 @@ SimpleStatement: SimpleStatement<'input> = {
 	},
 	<name:Ident> "=" <value:Expr> => SimpleStatement::Assignment { name, value },
 	<name:Ident> OpEq <value:Expr> => SimpleStatement::Assignment { name, value: todo!() },
-	"return" => SimpleStatement::Expr(Expr::func_call(ret, vec![])),
-	"yield" => SimpleStatement::Expr(Expr::func_call(yld, vec![])),
+	"return" => SimpleStatement::Expr(Expr::func_call(Ident(idents.get_or_intern_static("ret")), vec![])),
+	"yield" => SimpleStatement::Expr(Expr::func_call(Ident(idents.get_or_intern_static("yld")), vec![])),
 }
 OpEq = { // TODO
 	"+=",
@@ -180,92 +180,56 @@ AliasParam: AliasParam<'input> = {
 Expr = { LogicalOr }
 
 LogicalOr: Expr<'input> = {
-	<l:LogicalOr> "||" <r:LogicalAnd> => {
-		Expr::binary_op(l, r, Op::LogicalOr, |l, r| (l != 0 || r != 0) as i64)
-	},
+	<lhs:LogicalOr> "||" <rhs:LogicalAnd> => Expr::binary_op(lhs, rhs, Op::LogicalOr, |lhs, rhs| (lhs != 0 || rhs != 0) as i64),
 	LogicalAnd,
 }
 
 LogicalAnd: Expr<'input> = {
-	<l:LogicalAnd> "&&" <r:Compare> => {
-		Expr::binary_op(l, r, Op::LogicalAnd, |l, r| (l != 0 && r != 0) as i64)
-	},
+	<lhs:LogicalAnd> "&&" <rhs:Compare> => Expr::binary_op(lhs, rhs, Op::LogicalAnd, |lhs, rhs| (lhs != 0 && rhs != 0) as i64),
 	Compare,
 }
 
 Compare: Expr<'input> = {
-	<l:Compare> "==" <r:BinaryOr> => {
-		Expr::binary_op(l, r, Op::Equ, |l, r| (l == r) as i64)
-	},
-	<l:Compare> "!=" <r:BinaryOr> => {
-		Expr::binary_op(l, r, Op::NotEqu, |l, r| (l != r) as i64)
-	},
-	<l:Compare> "<" <r:BinaryOr> => {
-		Expr::binary_op(l, r, Op::LessThan, |l, r| (l < r) as i64)
-	},
-	<l:Compare> "<=" <r:BinaryOr> => {
-		Expr::binary_op(l, r, Op::LessThanEqu, |l, r| (l <= r) as i64)
-	},
-	<l:Compare> ">" <r:BinaryOr> => {
-		Expr::binary_op(l, r, Op::GreaterThan, |l, r| (l > r) as i64)
-	},
-	<l:Compare> ">=" <r:BinaryOr> => {
-		Expr::binary_op(l, r, Op::GreaterThanEqu, |l, r| (l >= r) as i64)
-	},
+	<lhs:Compare> "==" <rhs:BinaryOr> => Expr::binary_op(lhs, rhs, Op::Equ, |lhs, rhs| (lhs == rhs) as i64),
+	<lhs:Compare> "!=" <rhs:BinaryOr> => Expr::binary_op(lhs, rhs, Op::NotEqu, |lhs, rhs| (lhs != rhs) as i64),
+	<lhs:Compare> "<" <rhs:BinaryOr> => Expr::binary_op(lhs, rhs, Op::LessThan, |lhs, rhs| (lhs < rhs) as i64),
+	<lhs:Compare> "<=" <rhs:BinaryOr> => Expr::binary_op(lhs, rhs, Op::LessThanEqu, |lhs, rhs| (lhs <= rhs) as i64),
+	<lhs:Compare> ">" <rhs:BinaryOr> => Expr::binary_op(lhs, rhs, Op::GreaterThan, |lhs, rhs| (lhs > rhs) as i64),
+	<lhs:Compare> ">=" <rhs:BinaryOr> => Expr::binary_op(lhs, rhs, Op::GreaterThanEqu, |lhs, rhs| (lhs >= rhs) as i64),
 	BinaryOr,
 }
 
 BinaryOr: Expr<'input> = {
-	<l:BinaryOr> "|" <r:BinaryXor> => {
-		Expr::binary_op(l, r, Op::BinaryOr, |l, r| l | r)
-	},
+	<lhs:BinaryOr> "|" <rhs:BinaryXor> => Expr::binary_op(lhs, rhs, Op::BinaryOr, |lhs, rhs| lhs | rhs),
 	BinaryXor,
 }
 
 BinaryXor: Expr<'input> = {
-	<l:BinaryAnd> "^" <r:BinaryAnd> => {
-		Expr::binary_op(l, r, Op::BinaryXor, |l, r| l ^ r)
-	},
+	<lhs:BinaryAnd> "^" <rhs:BinaryAnd> => Expr::binary_op(lhs, rhs, Op::BinaryXor, |lhs, rhs| lhs ^ rhs),
 	BinaryAnd,
 }
 
 BinaryAnd: Expr<'input> = {
-	<l:BinaryAnd> "&" <r:Shift> => {
-		Expr::binary_op(l, r, Op::BinaryAnd, |l, r| l & r)
-	},
+	<lhs:BinaryAnd> "&" <rhs:Shift> => Expr::binary_op(lhs, rhs, Op::BinaryAnd, |lhs, rhs| lhs & rhs),
 	Shift,
 }
 
 Shift: Expr<'input> = {
-	<l:Shift> "<<" <r:Addition> => {
-		Expr::binary_op(l, r, Op::ShiftLeft, |l, r| l << r)
-	},
-	<l:Shift> ">>" <r:Addition> => {
-		Expr::binary_op(l, r, Op::ShiftRight, |l, r| l >> r)
-	},
+	<lhs:Shift> "<<" <rhs:Addition> => Expr::binary_op(lhs, rhs, Op::ShiftLeft, |lhs, rhs| lhs << rhs),
+	<lhs:Shift> ">>" <rhs:Addition> => Expr::binary_op(lhs, rhs, Op::ShiftRight, |lhs, rhs| lhs >> rhs),
 	Addition,
 }
 
 Addition: Expr<'input> = {
-	<l:Addition> "+" <r:Factor> => {
-		Expr::binary_op(l, r, Op::Add, |l, r| l + r)
-	},
-	<l:Addition> "-" <r:Factor> => {
-		Expr::binary_op(l, r, Op::Sub, |l, r| l - r)
-	},
+	<lhs:Addition> "+" <rhs:Factor> => Expr::binary_op(lhs, rhs, Op::Add, |lhs, rhs| lhs + rhs),
+	<lhs:Addition> "-" <rhs:Factor> => Expr::binary_op(lhs, rhs, Op::Sub, |lhs, rhs| lhs - rhs),
 	Factor,
 };
 
 Factor: Expr<'input> = {
-	<l:Factor> "*" <r:Unary> => {
-		Expr::binary_op(l, r, Op::Mul, |l, r| l * r)
-	},
-	<l:Factor> "/" <r:Unary> => {
-		Expr::binary_op(l, r, Op::Div, |l, r| l / r)
-	},
-	<l:Factor> "%" <r:Unary> => {
-		Expr::binary_op(l, r, Op::Mod, |l, r| l % r)
-	},
+	<lhs:Factor> "*" <rhs:Unary> => Expr::binary_op(lhs, rhs, Op::Mul, |lhs, rhs| lhs * rhs),
+	<lhs:Factor> "/" <rhs:Unary> => Expr::binary_op(lhs, rhs, Op::Div, |lhs, rhs| lhs / rhs),
+	<lhs:Factor> "%" <rhs:Unary> => Expr::binary_op(lhs, rhs, Op::Mod, |lhs, rhs| lhs % rhs),
 	Unary,
 };
 
@@ -305,7 +269,7 @@ String: &'input str = {
 };
 
 Ident: Ident = {
-	identifier => Ident(idents.intern(<>).expect("Too many unique identifiers have been generated!")),
+	identifier => Ident(idents.get_or_intern(<>)),
 };
 
 // ** Macros **

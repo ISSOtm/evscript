@@ -2,10 +2,10 @@ use lalrpop_util::lalrpop_mod;
 
 use crate::expr::Expr;
 
-#[derive(Debug, Clone)]
-pub struct Ident(intaglio::Symbol);
-#[derive(Debug, Clone)]
-pub struct Location(());
+#[derive(Debug, Clone, Copy)]
+pub struct Ident(string_interner::symbol::SymbolU32);
+/// The location type used to refer to the source.
+pub type Location = usize; // LALRPOP's built-in lexer returns `usize`s, and using a newtype would incur a *lot* of boilerplate.
 
 lalrpop_mod!(parser);
 

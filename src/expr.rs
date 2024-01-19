@@ -56,7 +56,7 @@ impl<'input> Expr<'input> {
 		}
 	}
 
-	pub fn func_call(func: Ident, mut args: Vec<Expr>) -> Self {
+	pub fn func_call(func: Ident, mut args: Vec<Expr<'input>>) -> Self {
 		// Compute the indices of the arguments in the concatenated vector.
 		let mut acc = 0;
 		let arg_refs = args
@@ -69,24 +69,31 @@ impl<'input> Expr<'input> {
 		// Generate the `call` operation, for later. (This collects two locals into a single object.)
 		let call = Op::Call(func, arg_refs);
 
+		// `split_at_mut(1)` would panic if `args` was empty.
 		let ops = if args.is_empty() {
 			vec![call]
 		} else {
-			// Concatenate
-			let ([Expr { ops: first, .. }], rest) = args.split_at_mut(1);
+			// Concatenate all of the operations.
+			let (first, rest) = args.split_at_mut(1);
+			let first = &mut first[0].ops;
 			first.reserve(acc - first.len() + 1);
-			for Expr { ops } in rest {
-				first.append(ops);
+			for arg in rest {
+				first.append(&mut arg.ops);
 			}
-			args[0].ops
+
+			// Ideally we'd just move out of `args[0]` to avoid the overhead of `swap_remove`, but
+			// apparently this doesn't work. (Why?)
+			// `swap_remove` is simpler than `remove()` or `drain()`, so I expect it should be more
+			// optimizer-friendly.
+			args.swap_remove(0).ops
 		};
 		Self { ops }
 	}
 
-	pub fn unary_op<Oper: FnOnce(OpRef) -> Op<'input>, CstEval: FnOnce(i64) -> i64>(
+	pub fn unary_op<Oper: FnOnce(OpRef) -> Op<'input>, ConstEval: FnOnce(i64) -> i64>(
 		mut expr: Self,
 		operator: Oper,
-		const_eval: CstEval,
+		const_eval: ConstEval,
 	) -> Self {
 		if let [Op::Number(n)] = &mut expr.ops[..] {
 			*n = const_eval(*n);
@@ -104,17 +111,22 @@ impl<'input> Expr<'input> {
 		expr
 	}
 
-	pub fn binary_op<Oper: FnOnce(OpRef, OpRef) -> Op<'input>, CstEval: FnOnce(i64, i64) -> i64>(
+	pub fn binary_op<
+		Oper: FnOnce(OpRef, OpRef) -> Op<'input>,
+		ConstEval: FnOnce(i64, i64) -> i64,
+	>(
 		mut lhs: Self,
-		rhs: Self,
+		mut rhs: Self,
 		operator: Oper,
-		const_eval: CstEval,
+		const_eval: ConstEval,
 	) -> Self {
 		if let ([Op::Number(lhs)], [Op::Number(rhs)]) = (&mut lhs.ops[..], &rhs.ops[..]) {
 			*lhs = const_eval(*lhs, *rhs);
 		} else {
 			let left_idx = OpRef(lhs.ops.len());
 			let right_idx = OpRef(rhs.ops.len());
+			lhs.ops.reserve(rhs.ops.len() + 1);
+			lhs.ops.append(&mut rhs.ops);
 			lhs.ops.push(operator(left_idx, right_idx));
 		}
 		lhs
