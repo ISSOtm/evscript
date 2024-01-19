@@ -1,11 +1,12 @@
-use crate::types::*;
-use lalrpop_util::ParseError;
-
-use std::collections::VecDeque;
-use std::io::Read;
 use std::str::FromStr;
 
-grammar;
+use intaglio::SymbolTable;
+use lalrpop_util::ParseError;
+
+use crate::expr::{Expr, Op};
+use super::*;
+
+grammar(idents: &mut SymbolTable, ret: Ident, yld: Ident);
 
 match {
 	"+", "-", "*", "/", "%", "&", "^", "|", "<<", ">>", "!",
@@ -30,341 +31,291 @@ match {
 
 pub File = { <Root*> }
 
-Root: Root = {
-	<start:@L> <environment:Iden> <name:Iden> <end:@L> "{" <contents:Statement*> "}" => {
-		Root::Function( name, Function { environment, contents, start, end } )
+Root: Root<'input> = {
+	Script => Root::Script(<>),
+	Env => Root::Env(<>),
+	RawAsm => Root::RawAsm(<>),
+	Include => Root::Include(<>),
+	Typedef => Root::Typedef(<>),
+	Struct => Root::Struct(<>),
+}
+
+Script: Script<'input> = {
+	<def_start:@L> <r#type:Ident> <name:Ident> <def_end:@R> "{" <body:ScriptStatement*> "}" => {
+		Script { def_start, r#type, name, def_end, body }
+	}
+}
+
+ScriptStatement: ScriptStatement<'input> = {
+	<start:@L> <stmt:SimpleStatement> <end:@R> ";" => {
+		ScriptStatement { start, end, kind: ScriptStatementKind::SimpleStatement(stmt) }
 	},
-	"env" <name:Iden> "{" <contents:Statement*> "}" => {
-		Root::Environment( name, Environment { contents } )
+	If,
+	<start:@L> "while" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" => {
+		ScriptStatement { start, end, kind: ScriptStatementKind::While { cond, body } }
 	},
-	raw_assembly =>? {
-		let mut bytes = <>.bytes().collect::<VecDeque<u8>>();
-		bytes.pop_front();
-		bytes.pop_front();
-		bytes.pop_front();
-		bytes.pop_front();
-		bytes.pop_back();
-		bytes.pop_back();
-		bytes.pop_back();
-		bytes.pop_back();
-		let mut result = String::new();
-		bytes.read_to_string(&mut result)
-			.map_err(|err| ParseError::User {
-				error: "Invalid UTF8"
-			})?;
-		Ok(Root::Assembly(result))
+	"do" "{" <body:ScriptStatement*> "}" <start:@L> "while" <cond:Expr> ";" => {
+		ScriptStatement { start, end, kind: ScriptStatementKind::DoWhile { cond, body } }
 	},
-	"include" <path:String> ";" => Root::Include(path),
-	"typedef" <name:Iden> "=" <t:Iden> ";" => Root::Typedef { name, t },
-	"struct" <name:Iden> "{" <contents:Comma<StructMember>> "}" => Root::Struct { name, contents },
+	<start:@L> "for" <init:SimpleStatement> ";" <cond:Expr> ";" <post_body:SimpleStatement> <end:@R> "{" <body:ScriptStatement*> "}" => {
+		ScriptStatement { start, end, kind: ScriptStatementKind::For { init, cond, post_body, body } }
+	},
+	<start:@L> "repeat" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" => {
+		ScriptStatement { start, end, kind: ScriptStatementKind::Repeat { cond, body } }
+	},
+	<start:@L> "loop" <end:@R> "{" <body:ScriptStatement*> "}" => {
+		ScriptStatement { start, end, kind: ScriptStatementKind::Loop { body } }
+	},
+}
+If: ScriptStatement<'input> = {
+	<start:@L> "if" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" => {
+		ScriptStatement {
+			start,
+			end,
+			kind: ScriptStatementKind::If { cond, body, else_stmt: vec![] },
+		}
+	},
+	<start:@L> "if" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" "else" "{" <else_stmt:ScriptStatement*> "}" => {
+		ScriptStatement {
+			start,
+			end,
+			kind: ScriptStatementKind::If { cond, body, else_stmt },
+		}
+	},
+	<start:@L> "if" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" "else" <else_stmt:If> => {
+		ScriptStatement {
+			start,
+			end,
+			kind: ScriptStatementKind::If { cond, body, else_stmt: vec![else_stmt] },
+		}
+	},
+}
+
+Env: Env<'input> = {
+	"env" <name:Ident> "{" <body:EnvStatement*> "}" => Env { name, body },
+}
+
+EnvStatement: EnvStatement<'input> = {
+	<start:@L> <kind:EnvStatementKind> <end:@R> ";" => EnvStatement { start, end, kind },
+}
+EnvStatementKind: EnvStatementKind<'input> = {
+	"def" <name:Ident> "(" <args:Comma<DefinitionParam>> ")" => {
+		EnvStatementKind::Def { name, args, kind: DefKind::Simple }
+	},
+	"alias" <name:Ident> "(" <args:Comma<DefinitionParam>> ")" "=" <target:Ident> "(" <target_args:Comma<AliasParam>> ")" => {
+		EnvStatementKind::Def { name, args, kind: DefKind::Alias { target, target_args } }
+	},
+	"macro" <name:Ident> "(" <args:Comma<DefinitionParam>> ")" "=" <target:Ident> => {
+		EnvStatementKind::Def { name, args, kind: DefKind::Macro { target } }
+	},
+	"use" <target:Ident> => EnvStatementKind::Use { target },
+	"pool" "=" <size:Expr> => EnvStatementKind::Pool { size },
+}
+
+SimpleStatement: SimpleStatement<'input> = {
+	Expr => SimpleStatement::Expr(<>),
+	<base_type:Ident> <ptr:"ptr"?> <name:Ident> <init:("=" <Expr>)?> => SimpleStatement::VarDecl {
+		name,
+		r#type: VarType { base_type, is_ptr: ptr.is_some() },
+		init,
+	},
+	<name:Ident> "=" <value:Expr> => SimpleStatement::Assignment { name, value },
+	<name:Ident> OpEq <value:Expr> => SimpleStatement::Assignment { name, value: todo!() },
+	"return" => SimpleStatement::Expr(Expr::func_call(ret, vec![])),
+	"yield" => SimpleStatement::Expr(Expr::func_call(yld, vec![])),
+}
+OpEq = { // TODO
+	"+=",
+	"-=",
+	"*=",
+	"/=",
+	"%=",
+	"&=",
+	"|=",
+	"^=",
+	"<<=",
+	">>=",
+}
+
+RawAsm: RawAsm<'input> = {
+	raw_assembly => {
+		let len = <>.len();
+		// Chop off the leading `#asm` and the trailing `#end`.
+		RawAsm { contents: &<>[4..len - 4] }
+	}
+}
+
+Include: Include<'input> = {
+	"include" <path:String> => Include { path },
+}
+
+Typedef: Typedef = {
+	"typedef" <name:Ident> "=" <target:Ident> ";" => Typedef { name, target },
+}
+
+Struct: Struct = {
+	"struct" <name:Ident> "{" <members:Comma<StructMember>> "}" => Struct { name, members },
 }
 
 StructMember: StructMember = {
-	<name:Iden> ":" <t:Iden> => StructMember { name, t },
+	<name:Ident> ":" <r#type:Ident> => StructMember { name, r#type },
 }
 
-Statement: Statement = {
-	<start:@L> "def" <name:Iden> "(" <args:Comma<DefinitionParam>> ")" <end:@R> ";" => {
-		Statement { t: StatementType::Definition(name, Definition::Def(Def { args, bytecode: 0 })), start, end }
+DefinitionParam: DefParam = {
+	"return" <name:Ident> => DefParam { name, kind: DefParamKind::Return },
+	"const" <name:Ident> => DefParam { name, kind: DefParamKind::Const },
+	<name:Ident> => DefParam { name, kind: DefParamKind::Simple },
+}
+
+AliasParam: AliasParam<'input> = {
+	"$" <i:number> =>? match usize::from_str(i) {
+		Ok(idx) => Ok(AliasParam::Placeholder(idx)),
+		Err(_) => Err(ParseError::User { error: "Argument index is too large" }),
 	},
-	<start:@L> "alias" <name:Iden> "(" <args:Comma<DefinitionParam>> ")" "=" <target:Iden> "(" <target_args:Comma<AliasParam>> ")" <end:@R> ";" => {
-		Statement { t: StatementType::Definition(name, Definition::Alias(Alias { args, target, target_args })), start, end }
-	},
-	<start:@L> "macro" <name:Iden> "(" <args:Comma<DefinitionParam>> ")" "=" <target:Iden> <end:@R> ";" => {
-		Statement { t: StatementType::Definition(name, Definition::Macro(Macro { args, target })), start, end }
-	},
-	<start:@L> "use" <env:Iden> <end:@R> ";" => Statement { t: StatementType::Use(env), start, end },
-	<start:@L> "pool" "=" <expr:Expr> <end:@R> ";" => Statement { t: StatementType::Pool(expr), start, end },
-	<start:@L> <expr:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(expr), start, end },
-	<start:@L> <t:Iden> <i:Iden> <end:@R> ";" => Statement { t: StatementType::Declaration(t, i), start, end },
-	<start:@L> <t:Iden> "ptr" <i:Iden> <end:@R> ";" => Statement { t: StatementType::PointerDeclaration(t, i), start, end },
-	<start:@L> <t:Iden> <l:Iden> "=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::DeclareAssign(t, l, r), start, end },
-	<start:@L> <t:Iden> "ptr" <l:Iden> "=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::PointerDeclareAssign(t, l, r), start, end },
-	Assignment,
-	IfContainer,
-	<start:@L> "while" <cond:Expr> <end:@R> "{" <contents:Statement*> "}" => Statement { t: StatementType::While(cond, contents), start, end },
-	"do" "{" <contents:Statement*> "}" <start:@L> "while" <cond:Expr> <end:@R> ";" => Statement { t: StatementType::Do(cond, contents), start, end },
-	<start:@L> "for" <pro:Statement> <cond:Expr> ";" <epi:Statement> <end:@R> "{" <contents:Statement*> "}" => Statement { t: StatementType::For(Box::new(pro), cond, Box::new(epi), contents), start, end },
-	<start:@L> "repeat" <cond:Expr> <end:@R> "{" <contents:Statement*> "}" => Statement { t: StatementType::Repeat(cond, contents), start, end },
-	<start:@L> "loop" <end:@R> "{" <contents:Statement*> "}" => Statement { t: StatementType::Loop(contents), start, end },
-	<start:@L> "return" <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Call(String::from("ret"), vec![])), start, end },
-	<start:@L> "yield" <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Call(String::from("yld"), vec![])), start, end },
+	<opt_const:"const"?> <expr:Expr> => AliasParam::Expr { is_const: opt_const.is_some(), expr },
 }
 
-DefinitionParam: DefinitionParam = {
-	"return" <i:Iden> => DefinitionParam::Return(i),
-	"const" <i:Iden> => DefinitionParam::Const(i),
-	Iden => DefinitionParam::Type(<>),
-}
-
-AliasParam: AliasParam = {
-	"$" <i:number> =>? Ok(AliasParam::ArgId(usize::from_str(i)
-		.map_err(|_| ParseError::User {
-			error: "Argument index is too large"
-		})?)),
-	Expr => AliasParam::Expression(<>),
-	"const" <expr:Expr> => AliasParam::Const(expr),
-}
-
-IfContainer: Statement = {
-	<start:@L> "if" <cond:Expr> <end:@R> "{" <contents:Statement*> "}" => Statement { t: StatementType::If(cond, contents, None), start, end },
-	<start:@L> "if" <cond:Expr> <end:@R> "{" <contents:Statement*> "}" "else" "{" <else_contents:Statement*> "}" => Statement { t: StatementType::If(cond, contents, Some(else_contents)), start, end },
-	<start:@L> "if" <cond:Expr> <end:@R> "{" <contents:Statement*> "}" "else" <else_contents:IfContainer> => Statement { t: StatementType::If(cond, contents, Some(vec![else_contents])), start, end },
-}
-
-Assignment: Statement = {
-	<start:@L> <l:Iden> "=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l, Box::new(r))), start, end },
-	<start:@L> <l:Iden> "+=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::Add(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> "-=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::Sub(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> "*=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::Mul(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> "/=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::Div(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> "%=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::Mod(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> "&=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::BinaryAnd(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> "|=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::BinaryOr(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> "^=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::BinaryXor(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> "<<=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::ShiftLeft(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-	<start:@L> <l:Iden> ">>=" <r:Expr> <end:@R> ";" => Statement { t: StatementType::Expression(Rpn::Set(l.clone(), Box::new(Rpn::ShiftRight(Box::new(Rpn::Variable(l)), Box::new(r))))), start, end },
-}
+// ** Expressions **
 
 Expr = { LogicalOr }
 
-LogicalOr: Rpn = {
+LogicalOr: Expr<'input> = {
 	<l:LogicalOr> "||" <r:LogicalAnd> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed((l != 0 || r != 0) as i64);
-			}
-		}
-		Rpn::LogicalOr(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::LogicalOr, |l, r| (l != 0 || r != 0) as i64)
 	},
 	LogicalAnd,
 }
 
-LogicalAnd: Rpn = {
+LogicalAnd: Expr<'input> = {
 	<l:LogicalAnd> "&&" <r:Compare> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed((l != 0 && r != 0) as i64);
-			}
-		}
-		Rpn::LogicalAnd(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::LogicalAnd, |l, r| (l != 0 && r != 0) as i64)
 	},
 	Compare,
 }
 
-Compare: Rpn = {
+Compare: Expr<'input> = {
 	<l:Compare> "==" <r:BinaryOr> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed((l == r) as i64);
-			}
-		}
-		Rpn::Equ(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::Equ, |l, r| (l == r) as i64)
 	},
 	<l:Compare> "!=" <r:BinaryOr> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed((l != r) as i64);
-			}
-		}
-		Rpn::NotEqu(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::NotEqu, |l, r| (l != r) as i64)
 	},
 	<l:Compare> "<" <r:BinaryOr> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed((l < r) as i64);
-			}
-		}
-		Rpn::LessThan(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::LessThan, |l, r| (l < r) as i64)
 	},
 	<l:Compare> "<=" <r:BinaryOr> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed((l <= r) as i64);
-			}
-		}
-		Rpn::LessThanEqu(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::LessThanEqu, |l, r| (l <= r) as i64)
 	},
 	<l:Compare> ">" <r:BinaryOr> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed((l > r) as i64);
-			}
-		}
-		Rpn::GreaterThan(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::GreaterThan, |l, r| (l > r) as i64)
 	},
 	<l:Compare> ">=" <r:BinaryOr> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed((l >= r) as i64);
-			}
-		}
-		Rpn::GreaterThanEqu(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::GreaterThanEqu, |l, r| (l >= r) as i64)
 	},
 	BinaryOr,
 }
 
-BinaryOr: Rpn = {
+BinaryOr: Expr<'input> = {
 	<l:BinaryOr> "|" <r:BinaryXor> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l | r);
-			}
-		}
-		Rpn::BinaryOr(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::BinaryOr, |l, r| l | r)
 	},
 	BinaryXor,
 }
 
-BinaryXor: Rpn = {
+BinaryXor: Expr<'input> = {
 	<l:BinaryAnd> "^" <r:BinaryAnd> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l ^ r);
-			}
-		}
-		Rpn::BinaryXor(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::BinaryXor, |l, r| l ^ r)
 	},
 	BinaryAnd,
 }
 
-BinaryAnd: Rpn = {
+BinaryAnd: Expr<'input> = {
 	<l:BinaryAnd> "&" <r:Shift> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l & r);
-			}
-		}
-		Rpn::BinaryAnd(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::BinaryAnd, |l, r| l & r)
 	},
 	Shift,
 }
 
-Shift: Rpn = {
+Shift: Expr<'input> = {
 	<l:Shift> "<<" <r:Addition> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l << r);
-			}
-		}
-		Rpn::ShiftLeft(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::ShiftLeft, |l, r| l << r)
 	},
 	<l:Shift> ">>" <r:Addition> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l >> r);
-			}
-		}
-		Rpn::ShiftRight(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::ShiftRight, |l, r| l >> r)
 	},
 	Addition,
 }
 
-Addition: Rpn = {
+Addition: Expr<'input> = {
 	<l:Addition> "+" <r:Factor> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l + r);
-			}
-		}
-		Rpn::Add(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::Add, |l, r| l + r)
 	},
 	<l:Addition> "-" <r:Factor> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l - r);
-			}
-		}
-		Rpn::Sub(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::Sub, |l, r| l - r)
 	},
 	Factor,
 };
 
-Factor: Rpn = {
+Factor: Expr<'input> = {
 	<l:Factor> "*" <r:Unary> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l * r);
-			}
-		}
-		Rpn::Mul(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::Mul, |l, r| l * r)
 	},
 	<l:Factor> "/" <r:Unary> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l / r);
-			}
-		}
-		Rpn::Div(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::Div, |l, r| l / r)
 	},
 	<l:Factor> "%" <r:Unary> => {
-		if let Rpn::Signed(l) = l {
-			if let Rpn::Signed(r) = r {
-				return Rpn::Signed(l % r);
-			}
-		}
-		Rpn::Mod(Box::new(l), Box::new(r))
+		Expr::binary_op(l, r, Op::Mod, |l, r| l % r)
 	},
 	Unary,
 };
 
-Unary: Rpn = {
-	"-" <l:Term> => {
-		if let Rpn::Signed(i) = l {
-			return Rpn::Signed(-i)
-		}
-		Rpn::Negate(Box::new(l))
-	},
-	"!" <l:Term> => {
-		if let Rpn::Signed(i) = l {
-			return Rpn::Signed(!i)
-		}
-		Rpn::Not(Box::new(l))
-	},
-	"&" <l:Iden> => Rpn::Address(l),
+Unary: Expr<'input> = {
+	"-" <Term> => Expr::unary_op(<>, Op::Neg, |n| -n),
+	"!" <Term> => Expr::unary_op(<>, Op::Cpl, |n| !n),
+	"&" <Ident> => Expr::address(<>),
 	Term,
 };
 
-Term: Rpn = {
-	Num,
-	String => Rpn::String(<>),
-	Iden => Rpn::Variable(<>),
+Term: Expr<'input> = {
+	Num => <>.into(),
+	String => <>.into(),
+	Ident => <>.into(),
 	"(" <Expr> ")",
-	"[" <e:Expr> "]" => Rpn::Deref(Box::new(e)),
-	<i:Iden> "(" <args:Comma<Expr>> ")" => Rpn::Call(i, args)
+	"[" <Expr> "]" => Expr::deref(<>),
+	<i:Ident> "(" <args:Comma<Expr>> ")" => Expr::func_call(i, args)
 };
 
-Num: Rpn = {
-	number =>? Ok(Rpn::Signed(i64::from_str(<>)
-		.map_err(|_| ParseError::User {
-			error: "Integer is too large (maximum of 64 bits, signed)"
-		})?)),
-};
+// ** Wrappers around "raw" terminal tokens**/
 
-Iden: String = {
-	identifier => String::from(<>),
-};
-
-String: String = {
-	string =>? {
-		let mut bytes = <>.bytes().collect::<VecDeque<u8>>();
-		bytes.pop_front();
-		bytes.pop_back();
-		let mut result = String::new();
-		bytes.read_to_string(&mut result)
-			.map_err(|err| ParseError::User {
-				error: "Invalid UTF8"
-			})?;
-		Ok(result)
+Num: i64 = {
+	number =>? {
+		i64::from_str(<>)
+			.map_err(|_| ParseError::User {
+				error: "Integer is out of range (must be signed 64-bit)"
+			})
 	},
-}
+};
+
+String: &'input str = {
+	string => {
+		// Chop off the starting and ending quotes.
+		let len = <>.len();
+		&<>[1..len - 1]
+	},
+};
+
+Ident: Ident = {
+	identifier => Ident(idents.intern(<>).expect("Too many unique identifiers have been generated!")),
+};
+
+// ** Macros **
 
 Comma<T>: Vec<T> = {
-    <mut v:(<T> ",")*> <e:T?> => match e {
-        None => v,
-        Some(e) => {
-            v.push(e);
-            v
-        }
-    }
+	<mut v:(<T> ",")*> <e:T?> => match e {
+		None => v,
+		Some(e) => {
+			v.push(e);
+			v
+		}
+	}
 };
