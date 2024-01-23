@@ -120,21 +120,26 @@ SimpleStatement: SimpleStatement<'input> = {
 		init,
 	},
 	<name:Ident> "=" <value:Expr> => SimpleStatement::Assignment { name, value },
-	<name:Ident> OpEq <value:Expr> => SimpleStatement::Assignment { name, value: todo!() },
+	<name:Ident> <op:OpEq> <value:Expr> => SimpleStatement::Assignment {
+		name,
+		value: Expr::binary_op(name.into(), value, op, |_lhs, _rhs| {
+			panic!("Ops involving vars are not supposed to be constant!!")
+		}),
+	},
 	"return" => SimpleStatement::Expr(Expr::func_call(Ident(idents.get_or_intern_static("ret")), vec![])),
 	"yield" => SimpleStatement::Expr(Expr::func_call(Ident(idents.get_or_intern_static("yld")), vec![])),
 }
-OpEq = { // TODO
-	"+=",
-	"-=",
-	"*=",
-	"/=",
-	"%=",
-	"&=",
-	"|=",
-	"^=",
-	"<<=",
-	">>=",
+OpEq: OpConstructor<'input> = {
+	"+=" => Op::Add,
+	"-=" => Op::Sub,
+	"*=" => Op::Mul,
+	"/=" => Op::Div,
+	"%=" => Op::Mod,
+	"&=" => Op::BinaryAnd,
+	"|=" => Op::BinaryOr,
+	"^=" => Op::BinaryXor,
+	"<<=" => Op::ShiftLeft,
+	">>=" => Op::ShiftRight,
 }
 
 RawAsm: RawAsm<'input> = {

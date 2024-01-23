@@ -1,13 +1,14 @@
 use lalrpop_util::lalrpop_mod;
 
-use crate::expr::Expr;
+use crate::expr::{Expr, Op, OpRef};
+
+lalrpop_mod!(parser);
 
 #[derive(Debug, Clone, Copy)]
 pub struct Ident(string_interner::symbol::SymbolU32);
 /// The location type used to refer to the source.
 pub type Location = usize; // LALRPOP's built-in lexer returns `usize`s, and using a newtype would incur a *lot* of boilerplate.
-
-lalrpop_mod!(parser);
+type OpConstructor<'input> = fn(OpRef, OpRef) -> Op<'input>;
 
 #[derive(Debug, Clone)]
 pub enum Root<'input> {
