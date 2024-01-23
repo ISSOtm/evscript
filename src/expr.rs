@@ -58,12 +58,13 @@ impl<'input> Expr<'input> {
 
 	pub fn func_call(func: Ident, mut args: Vec<Expr<'input>>) -> Self {
 		// Compute the indices of the arguments in the concatenated vector.
-		let mut acc = 0;
+		let mut total_len = 0;
 		let arg_refs = args
 			.iter()
+			.rev()
 			.map(|arg| {
-				acc += arg.ops.len();
-				OpRef(acc - 1)
+				total_len += arg.ops.len();
+				OpRef(total_len - 1)
 			})
 			.collect();
 		// Generate the `call` operation, for later. (This collects two locals into a single object.)
@@ -73,13 +74,15 @@ impl<'input> Expr<'input> {
 		let ops = if args.is_empty() {
 			vec![call]
 		} else {
-			// Concatenate all of the operations.
+			// Concatenate all of the operations, but **in reverse**,
+			// such that the first arg is on top of the stack!
 			let (first, rest) = args.split_at_mut(1);
 			let first = &mut first[0].ops;
-			first.reserve(acc - first.len() + 1);
-			for arg in rest {
+			first.reserve(total_len - first.len() + 1);
+			for arg in rest.iter_mut().rev() {
 				first.append(&mut arg.ops);
 			}
+			first.push(call);
 
 			// Ideally we'd just move out of `args[0]` to avoid the overhead of `swap_remove`, but
 			// apparently this doesn't work. (Why?)
