@@ -1,2 +1,2 @@
-mod expr;
-mod parse;
+pub mod expr;
+pub mod parsing;

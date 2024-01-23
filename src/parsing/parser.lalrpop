@@ -89,7 +89,7 @@ If: ScriptStatement<'input> = {
 }
 
 Env: Env<'input> = {
-	"env" <name:Ident> "{" <body:EnvStatement*> "}" => Env { name, body },
+	<start:@L> "env" <name:Ident> <end:@R> "{" <body:EnvStatement*> "}" => Env { span: (start, end), name, body },
 }
 
 EnvStatement: EnvStatement<'input> = {
