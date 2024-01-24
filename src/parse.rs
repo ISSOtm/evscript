@@ -8,6 +8,8 @@ lalrpop_mod!(parser);
 pub struct Ident(string_interner::symbol::SymbolU32);
 /// The location type used to refer to the source.
 pub type Location = usize; // LALRPOP's built-in lexer returns `usize`s, and using a newtype would incur a *lot* of boilerplate.
+/// A reference to a slice of the source code.
+pub type Span = (Location, Location);
 type OpConstructor<'input> = fn(OpRef, OpRef) -> Op<'input>;
 
 #[derive(Debug, Clone)]
@@ -22,17 +24,15 @@ pub enum Root<'input> {
 
 #[derive(Debug, Clone)]
 pub struct Script<'input> {
-	def_start: Location,
+	span: Span,
 	r#type: Ident,
 	name: Ident,
-	def_end: Location,
 	body: Vec<ScriptStatement<'input>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ScriptStatement<'input> {
-	start: Location,
-	end: Location,
+	span: Span,
 	kind: ScriptStatementKind<'input>,
 }
 
@@ -95,8 +95,7 @@ pub struct Env<'input> {
 
 #[derive(Debug, Clone)]
 pub struct EnvStatement<'input> {
-	start: Location,
-	end: Location,
+	span: Span,
 	kind: EnvStatementKind<'input>,
 }
 

@@ -41,51 +41,48 @@ Root: Root<'input> = {
 }
 
 Script: Script<'input> = {
-	<def_start:@L> <r#type:Ident> <name:Ident> <def_end:@R> "{" <body:ScriptStatement*> "}" => {
-		Script { def_start, r#type, name, def_end, body }
+	<start:@L> <r#type:Ident> <name:Ident> <end:@R> "{" <body:ScriptStatement*> "}" => {
+		Script { span: (start, end), r#type, name, body }
 	}
 }
 
 ScriptStatement: ScriptStatement<'input> = {
 	<start:@L> <stmt:SimpleStatement> <end:@R> ";" => {
-		ScriptStatement { start, end, kind: ScriptStatementKind::SimpleStatement(stmt) }
+		ScriptStatement { span: (start, end), kind: ScriptStatementKind::SimpleStatement(stmt) }
 	},
 	If,
 	<start:@L> "while" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" => {
-		ScriptStatement { start, end, kind: ScriptStatementKind::While { cond, body } }
+		ScriptStatement { span: (start, end), kind: ScriptStatementKind::While { cond, body } }
 	},
 	"do" "{" <body:ScriptStatement*> "}" <start:@L> "while" <cond:Expr> <end:@R> ";" => {
-		ScriptStatement { start, end, kind: ScriptStatementKind::DoWhile { cond, body } }
+		ScriptStatement { span: (start, end), kind: ScriptStatementKind::DoWhile { cond, body } }
 	},
 	<start:@L> "for" <init:SimpleStatement> ";" <cond:Expr> ";" <post_body:SimpleStatement> <end:@R> "{" <body:ScriptStatement*> "}" => {
-		ScriptStatement { start, end, kind: ScriptStatementKind::For { init, cond, post_body, body } }
+		ScriptStatement { span: (start, end), kind: ScriptStatementKind::For { init, cond, post_body, body } }
 	},
 	<start:@L> "repeat" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" => {
-		ScriptStatement { start, end, kind: ScriptStatementKind::Repeat { cond, body } }
+		ScriptStatement { span: (start, end), kind: ScriptStatementKind::Repeat { cond, body } }
 	},
 	<start:@L> "loop" <end:@R> "{" <body:ScriptStatement*> "}" => {
-		ScriptStatement { start, end, kind: ScriptStatementKind::Loop { body } }
+		ScriptStatement { span: (start, end), kind: ScriptStatementKind::Loop { body } }
 	},
 }
 If: ScriptStatement<'input> = {
 	<start:@L> "if" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" => {
 		ScriptStatement {
-			start,
-			end,
+			span: (start, end),
 			kind: ScriptStatementKind::If { cond, body, else_stmt: vec![] },
 		}
 	},
 	<start:@L> "if" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" "else" "{" <else_stmt:ScriptStatement*> "}" => {
 		ScriptStatement {
-			start,
-			end,
+			span: (start, end),
 			kind: ScriptStatementKind::If { cond, body, else_stmt },
 		}
 	},
 	<start:@L> "if" <cond:Expr> <end:@R> "{" <body:ScriptStatement*> "}" "else" <else_stmt:If> => {
 		ScriptStatement {
-			start,
-			end,
+			span: (start, end),
 			kind: ScriptStatementKind::If { cond, body, else_stmt: vec![else_stmt] },
 		}
 	},
@@ -96,7 +93,7 @@ Env: Env<'input> = {
 }
 
 EnvStatement: EnvStatement<'input> = {
-	<start:@L> <kind:EnvStatementKind> <end:@R> ";" => EnvStatement { start, end, kind },
+	<start:@L> <kind:EnvStatementKind> <end:@R> ";" => EnvStatement { span: (start, end), kind },
 }
 EnvStatementKind: EnvStatementKind<'input> = {
 	"def" <name:Ident> "(" <args:Comma<DefinitionParam>> ")" => {
