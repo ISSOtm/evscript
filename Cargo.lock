@@ -266,7 +266,6 @@ dependencies = [
  "codespan-reporting",
  "lalrpop",
  "lalrpop-util",
- "regex",
  "string-interner",
 ]
 
