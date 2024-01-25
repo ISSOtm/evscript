@@ -32,7 +32,7 @@ struct Cli {
 
 fn main() {
 	let cli = Cli::parse();
-	let mut err_reporter = ErrorReporter::new(ColorChoice::Auto);
+	let mut err_reporter = DiagReporter::new(ColorChoice::Auto); // TODO
 
 	let mut files = FileDb::new();
 	let mut idents = StringInterner::new();
@@ -42,13 +42,11 @@ fn main() {
 	todo!();
 }
 
+/// A "database" storing the source code of each input file, as well as some info cached from that.
 #[derive(Debug)]
 struct FileDb {
 	files: HashMap<String, (Yoke<Roots<'static>, String>, Vec<usize>)>,
 }
-
-#[derive(Debug, Yokeable)]
-struct Roots<'a>(Vec<Root<'a>>);
 
 impl FileDb {
 	fn new() -> Self {
@@ -57,17 +55,22 @@ impl FileDb {
 		}
 	}
 
+	/// Loads an evscript source file from the filesystem.
+	///
 	/// If the loading fails for any reason, this function prints the error and then dies.
 	fn load_or_die(
 		&mut self,
 		path: &str,
 		idents: &mut StringInterner,
-		err_reporter: &mut ErrorReporter,
+		err_reporter: &mut DiagReporter,
 	) -> Result<&Roots<'_>, std::io::Error> {
 		Ok(match self.files.entry(path.to_owned()) {
+			// If the file has already been loaded, don't do the work again.
 			Entry::Occupied(entry) => entry.into_mut(),
 
+			// If the file has not been loaded it again, load it and cache the returned AST.
 			Entry::Vacant(entry) => {
+				// Try reading the source code. Die if that fails for any reason.
 				let source = match std::fs::read_to_string(entry.key()) {
 					Ok(source) => source,
 					Err(err) => {
@@ -78,6 +81,9 @@ impl FileDb {
 					}
 				};
 
+				// Since the parsing result borrows from the source code string, we need to use a `Yoke`.
+				// We need to keep the entire source code around for reporting errors with source
+				// code, so might as well avoid copies, huh?
 				let yoke = Yoke::attach_to_cart(source, |source| {
 					// The syntax error must be reported immediately, as `ParseError`s borrow from
 					// the `source`, but `Yoke`'s API cannot accomodate that.
@@ -92,8 +98,13 @@ impl FileDb {
 					Roots(roots)
 				});
 
+				// Compute the byte indices at which lines start; this significantly speeds up
+				// error reporting.
+				// TODO: only compute this when requested, instead of every time a file is loaded?
 				let line_starts =
 					codespan_reporting::files::line_starts(yoke.backing_cart()).collect();
+
+				// Now that we have all the components, insert the entry!
 				entry.insert((yoke, line_starts))
 			}
 		}
@@ -162,6 +173,11 @@ impl<'a> Files<'a> for FileDb {
 	}
 }
 
+/// A newtype to store the result of parsing; this is required because we need it to implement
+/// [`Yokeable`].
+#[derive(Debug, Yokeable)]
+struct Roots<'a>(Vec<Root<'a>>);
+
 impl<'a> Deref for Roots<'a> {
 	type Target = Vec<Root<'a>>;
 
@@ -170,21 +186,23 @@ impl<'a> Deref for Roots<'a> {
 	}
 }
 
+/// A convenience struct to group all of the code and data related to printing diagnostics.
 #[derive(Debug)]
-struct ErrorReporter {
+struct DiagReporter {
 	output: codespan_reporting::term::termcolor::StandardStream,
 	config: codespan_reporting::term::Config,
 }
 
-impl ErrorReporter {
+impl DiagReporter {
 	fn new(color_choice: ColorChoice) -> Self {
 		let stderr = codespan_reporting::term::termcolor::StandardStream::stderr(color_choice);
 		Self {
 			output: stderr,
-			config: Default::default(),
+			config: Default::default(), // TODO
 		}
 	}
 
+	/// Emits a [`Diagnostic`].
 	fn emit<'files, F: Files<'files>>(
 		&mut self,
 		files: &'files F,
@@ -193,6 +211,7 @@ impl ErrorReporter {
 		codespan_reporting::term::emit(&mut self.output, &self.config, files, diagnostic).unwrap()
 	}
 
+	/// Emits an error that occurs when trying to parse an input file.
 	fn emit_parse_error<'files, F: Files<'files, FileId = ()>>(
 		&mut self,
 		files: &'files F,
@@ -207,7 +226,7 @@ impl ErrorReporter {
 			ParseError::UnrecognizedEof { location, expected } => {
 				diag.message = "Unexpected end of file".to_string();
 				diag.labels = vec![Label::primary((), location..location)];
-				diag.notes = vec![format!("Expected {}", TokenList(expected))];
+				diag.notes = vec![format!("Expected {}", ExpectedTokList(expected))];
 			}
 			ParseError::UnrecognizedToken {
 				token: (start, token, end),
@@ -215,7 +234,7 @@ impl ErrorReporter {
 			} => {
 				diag.message = format!("Unexpected {token}");
 				diag.labels = vec![Label::primary((), start..end)];
-				diag.notes = vec![format!("Expected {}", TokenList(expected))];
+				diag.notes = vec![format!("Expected {}", ExpectedTokList(expected))];
 			}
 			ParseError::ExtraToken {
 				token: (start, token, end),
@@ -230,10 +249,11 @@ impl ErrorReporter {
 	}
 }
 
+/// A convenience struct for printing a list of expected token's names.
 #[derive(Debug)]
-struct TokenList(Vec<String>);
+struct ExpectedTokList(Vec<String>);
 
-impl Display for TokenList {
+impl Display for ExpectedTokList {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		let expected = &self.0;
 		if let [only_token] = &expected[..] {
