@@ -20,17 +20,12 @@ pub fn parse<'input>(
 	input: &'input str,
 	identifiers: &mut StringInterner,
 ) -> Result<Vec<Root<'input>>, ParseError<'input>> {
-	parser::FileParser::new()
-		.parse(identifiers, input)
-		.map_err(ParseError)
+	parser::FileParser::new().parse(identifiers, input)
 }
 
-// TODO: allow this to do something useful!
 /// An error that can cause evscript parsing to fail.
-#[derive(Debug, Clone)]
-pub struct ParseError<'input>(
-	lalrpop_util::ParseError<Location, lalrpop_util::lexer::Token<'input>, &'static str>,
-);
+pub type ParseError<'input> =
+	lalrpop_util::ParseError<Location, lalrpop_util::lexer::Token<'input>, &'static str>;
 
 /// The kinds of statements can exist at the root of an evscript file.
 #[derive(Debug, Clone)]
