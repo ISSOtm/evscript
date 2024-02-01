@@ -6,8 +6,7 @@ use crate::expr::{Expr, Op, OpRef};
 lalrpop_mod!(parser, "/parsing/parser.rs");
 
 /// An identifier in evscript.
-#[derive(Debug, Clone, Copy)]
-pub struct Ident(string_interner::symbol::SymbolU32);
+pub type Ident = string_interner::symbol::SymbolU32;
 /// The location type used to refer to places in the source code.
 pub type Location = usize; // LALRPOP's built-in lexer returns `usize`s, and using a newtype would incur a *lot* of boilerplate.
 /// A reference to a slice of the source code.
