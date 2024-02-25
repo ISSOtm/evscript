@@ -20,7 +20,7 @@ pub struct StructMember {
 }
 
 pub fn collect_types(
-	files: &mut FileDb,
+	files: &FileDb,
 	root_path: &str,
 	idents: &mut StringInterner,
 ) -> Result<HashMap<Ident, Type>, Diagnostic<&'static str>> {

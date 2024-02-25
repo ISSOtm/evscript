@@ -123,8 +123,8 @@ SimpleStatement: SimpleStatement<'input> = {
 			panic!("Ops involving vars are not supposed to be constant!!")
 		}),
 	},
-	"return" => SimpleStatement::Expr(Expr::func_call(idents.get_or_intern_static("ret"), vec![])),
-	"yield" => SimpleStatement::Expr(Expr::func_call(idents.get_or_intern_static("yld"), vec![])),
+	"return" => SimpleStatement::Expr(Expr::ret()),
+	"yield" => SimpleStatement::Expr(Expr::yld()),
 }
 OpEq: OpConstructor<'input> = {
 	"+=" => Op::Add,

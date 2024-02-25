@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use codespan_reporting::{diagnostic::Diagnostic, term::termcolor::ColorChoice};
+use codespan_reporting::term::termcolor::ColorChoice;
 use string_interner::StringInterner;
 
 mod compiler;
@@ -10,22 +10,26 @@ use compiler::{DiagReporter, FileDb};
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
 struct Cli {
-	/// Output file
+	/// Output file path.
 	#[clap(short, long, value_parser, value_name = "PATH")]
 	output: String,
 
-	/// Report the peak memory usage of each function
+	/// Report the peak memory usage of each function.
 	#[clap(long = "report-usage")]
 	report_usage: bool,
 
-	/// Input file
+	/// Input file path.
 	#[clap(value_parser, value_name = "PATH")]
 	input: String,
+
+	/// Emit comments giving context to what's emitted.
+	#[clap(short, long)]
+	explain: bool,
 }
 
 fn main() -> ExitCode {
 	let cli = Cli::parse();
-	let mut err_reporter = DiagReporter::new(ColorChoice::Auto); // TODO
+	let mut err_reporter = DiagReporter::new(ColorChoice::Auto); // TODO: color
 
 	let mut files = FileDb::new();
 	let mut idents = StringInterner::new();
@@ -43,10 +47,13 @@ fn compile(
 	files: &mut FileDb,
 	idents: &mut StringInterner,
 	err_reporter: &mut DiagReporter,
-) -> Result<(), Diagnostic<&'static str>> {
+) -> Result<(), compiler::Diagnostic> {
 	files.parse_files(&cli.input, idents, err_reporter)?;
 
 	let types = compiler::collect_types(files, &cli.input, idents)?;
+	let envs = compiler::collect_envs(files, &cli.input, idents)?;
 
-	todo!();
+	compiler::emit(&cli, idents, types, envs)?;
+
+	Ok(())
 }

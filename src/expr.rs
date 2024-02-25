@@ -31,6 +31,8 @@ pub enum Op<'input> {
 	Variable(Ident),
 	Address(Ident),
 	Call(Ident, Vec<OpRef>),
+	Yield,
+	Return,
 
 	// Unary operators.
 	Deref(OpRef),
@@ -59,6 +61,20 @@ pub enum Op<'input> {
 }
 
 impl<'input> Expr<'input> {
+	/// Creates a "yield" expression.
+	pub fn yld() -> Self {
+		Self {
+			ops: vec![Op::Yield],
+		}
+	}
+
+	/// Creates a "return" expression.
+	pub fn ret() -> Self {
+		Self {
+			ops: vec![Op::Return],
+		}
+	}
+
 	/// Creates an "address of variable" expression.
 	pub fn address(variable: Ident) -> Self {
 		Self {
@@ -180,6 +196,14 @@ impl<'input> Expr<'input> {
 			lhs.ops.push(operator(left_idx, right_idx));
 		}
 		lhs
+	}
+
+	pub fn const_eval(&self) -> Option<i64> {
+		if let [Op::Number(num)] = &self.ops[..] {
+			Some(*num)
+		} else {
+			None
+		}
 	}
 }
 

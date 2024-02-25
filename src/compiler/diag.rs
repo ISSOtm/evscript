@@ -1,11 +1,13 @@
 use std::fmt::Display;
 
 use codespan_reporting::{
-	diagnostic::{Diagnostic, Label},
+	diagnostic::{Diagnostic as Diag, Label},
 	files::Files,
 	term::termcolor::ColorChoice,
 };
 use evscript::parsing::ParseError;
+
+pub type Diagnostic = Diag<&'static str>;
 
 /// A convenience struct to group all of the code and data related to printing diagnostics.
 #[derive(Debug)]
@@ -23,11 +25,11 @@ impl DiagReporter {
 		}
 	}
 
-	/// Emits a [`Diagnostic`].
+	/// Emits a [`Diagnostic`][Diag].
 	pub fn emit<'files, F: Files<'files>>(
 		&mut self,
 		files: &'files F,
-		diagnostic: &Diagnostic<<F as Files<'files>>::FileId>,
+		diagnostic: &Diag<<F as Files<'files>>::FileId>,
 	) {
 		codespan_reporting::term::emit(&mut self.output, &self.config, files, diagnostic).unwrap()
 	}
@@ -38,7 +40,7 @@ impl DiagReporter {
 		files: &'files F,
 		parse_err: ParseError<'_>,
 	) {
-		let mut diag = Diagnostic::error();
+		let mut diag = Diag::error();
 		match parse_err {
 			ParseError::InvalidToken { location } => {
 				diag.message = "Invalid token".to_string();
